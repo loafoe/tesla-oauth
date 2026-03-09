@@ -113,14 +113,16 @@ cosign verify ghcr.io/loafoe/tesla-oauth:v0.3.1 \
   --certificate-oidc-issuer="https://token.actions.githubusercontent.com"
 ```
 
-### Download and view SBOM
+### Download and view SBOM attestation
 
 ```bash
-# Download SBOM
-cosign download sbom ghcr.io/loafoe/tesla-oauth:v0.3.1 > sbom.spdx.json
+# Download SBOM attestation
+cosign download attestation ghcr.io/loafoe/tesla-oauth:latest \
+  --predicate-type https://spdx.dev/Document | jq -r '.payload' | base64 -d | jq .
 
-# View with jq
-cat sbom.spdx.json | jq .
+# Or save to file
+cosign download attestation ghcr.io/loafoe/tesla-oauth:latest \
+  --predicate-type https://spdx.dev/Document | jq -r '.payload' | base64 -d | jq '.predicate' > sbom.spdx.json
 ```
 
 ### Verify in Kubernetes admission controller
