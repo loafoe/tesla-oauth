@@ -1,0 +1,19 @@
+#!/bin/sh
+# Pre-commit hook for linting and testing
+
+set -e
+
+echo "Running go mod tidy..."
+go mod tidy
+if ! git diff --quiet go.mod go.sum; then
+    echo "Error: go mod tidy produced changes. Please commit them."
+    exit 1
+fi
+
+echo "Running linter..."
+golangci-lint run
+
+echo "Running tests..."
+go test ./...
+
+echo "All checks passed!"

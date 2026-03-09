@@ -594,7 +594,7 @@ func handleVehicleCommand(w http.ResponseWriter, r *http.Request) {
 			return v.Unlock(r.Context())
 		})
 	default:
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"result": false,
 			"error":  fmt.Sprintf("unknown command: %s", command),
 		})
@@ -603,14 +603,14 @@ func handleVehicleCommand(w http.ResponseWriter, r *http.Request) {
 
 	if cmdErr != nil {
 		log.Printf("Command %s failed for VIN %s: %v", command, vin, cmdErr)
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"result": false,
 			"error":  cmdErr.Error(),
 		})
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"result": true,
 	})
 }
