@@ -42,11 +42,22 @@ var (
 )
 
 const (
-	cookieName       = "tesla_token"
-	cookieMaxAge     = 8 * 60 * 60 // 8 hours
-	stateCookieName  = "tesla_state"
+	cookieName        = "tesla_token"
+	cookieMaxAge      = 8 * 60 * 60 // 8 hours
+	stateCookieName   = "tesla_state"
 	stateCookieMaxAge = 10 * 60 // 10 minutes
 )
+
+// isSecure checks if the request is over HTTPS (directly or via proxy)
+func isSecure(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	if r.Header.Get("X-Forwarded-Proto") == "https" {
+		return true
+	}
+	return false
+}
 
 func main() {
 	clientID = os.Getenv("TESLA_CLIENT_ID")
@@ -177,6 +188,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
 	state := generateState()
+	secure := isSecure(r)
 
 	// Store state in cookie for CSRF protection
 	http.SetCookie(w, &http.Cookie{
@@ -184,7 +196,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		Value:    state,
 		MaxAge:   stateCookieMaxAge,
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 		Path:     "/",
 	})
@@ -208,8 +220,8 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 		Value:    "",
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
+		Secure:   isSecure(r),
+		SameSite: http.SameSiteLaxMode,
 		Path:     "/",
 	})
 	http.Redirect(w, r, "/", http.StatusFound)
@@ -328,8 +340,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 		Value:    token.AccessToken,
 		MaxAge:   maxAge,
 		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
+		Secure:   isSecure(r),
+		SameSite: http.SameSiteLaxMode,
 		Path:     "/",
 		Expires:  time.Now().Add(time.Duration(maxAge) * time.Second),
 	})
