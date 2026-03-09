@@ -24,6 +24,19 @@ type TokenResponse struct {
 	ErrorDesc    string `json:"error_description,omitempty"`
 }
 
+type Vehicle struct {
+	ID          int64  `json:"id"`
+	VehicleID   int64  `json:"vehicle_id"`
+	VIN         string `json:"vin"`
+	DisplayName string `json:"display_name"`
+	State       string `json:"state"`
+}
+
+type VehiclesResponse struct {
+	Response []Vehicle `json:"response"`
+	Count    int       `json:"count"`
+}
+
 var (
 	clientID     string
 	clientSecret string
@@ -127,18 +140,56 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
 	if hasValidToken {
+		// Fetch vehicles
+		vehicles, vehicleErr := fetchVehicles(cookie.Value)
+
+		var vehiclesHTML string
+		if vehicleErr != nil {
+			vehiclesHTML = fmt.Sprintf(`<div class="error"><p>Failed to fetch vehicles: %v</p></div>`, vehicleErr)
+		} else if len(vehicles) == 0 {
+			vehiclesHTML = `<p>No vehicles found.</p>`
+		} else {
+			vehiclesHTML = `<div class="vehicles">`
+			for _, v := range vehicles {
+				stateClass := "state-offline"
+				if v.State == "online" {
+					stateClass = "state-online"
+				}
+				vehiclesHTML += fmt.Sprintf(`
+<div class="vehicle">
+<h3>%s</h3>
+<table>
+<tr><td><strong>VIN:</strong></td><td><code>%s</code></td></tr>
+<tr><td><strong>State:</strong></td><td><span class="%s">%s</span></td></tr>
+<tr><td><strong>Vehicle ID:</strong></td><td>%d</td></tr>
+</table>
+</div>`, v.DisplayName, v.VIN, stateClass, v.State, v.VehicleID)
+			}
+			vehiclesHTML += `</div>`
+		}
+
 		_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
 <html>
 <head><title>Tesla OAuth</title>
 <style>
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
 .success { background: #efe; border: 1px solid #cfc; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+.error { background: #fee; border: 1px solid #fcc; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
 .btn { display: inline-block; padding: 12px 24px; font-size: 16px; text-decoration: none; border-radius: 6px; cursor: pointer; border: none; }
 .btn-logout { background: #dc3545; color: white; }
 .btn-logout:hover { background: #c82333; }
 .token-box { background: #f5f5f5; border: 1px solid #ddd; padding: 15px; border-radius: 4px; margin: 10px 0; position: relative; }
 .token-box pre { margin: 0; white-space: pre-wrap; word-break: break-all; font-size: 12px; }
 .token-box button { position: absolute; top: 10px; right: 10px; padding: 5px 10px; cursor: pointer; }
+.vehicles { margin: 20px 0; }
+.vehicle { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; padding: 15px; margin-bottom: 15px; }
+.vehicle h3 { margin: 0 0 10px 0; color: #333; }
+.vehicle table { width: 100%%; border-collapse: collapse; }
+.vehicle td { padding: 5px 10px 5px 0; }
+.state-online { color: #28a745; font-weight: bold; }
+.state-offline { color: #6c757d; }
+details { margin-top: 20px; }
+summary { cursor: pointer; font-weight: bold; padding: 10px; background: #f5f5f5; border-radius: 4px; }
 </style>
 <script>
 function copyToClipboard(id) {
@@ -157,15 +208,20 @@ function copyToClipboard(id) {
 <p>You are logged in with a valid access token.</p>
 </div>
 
-<label><strong>Access Token:</strong></label>
+<h2>Your Vehicles</h2>
+%s
+
+<details>
+<summary>Access Token</summary>
 <div class="token-box">
 <button onclick="copyToClipboard('access-token')">Copy</button>
 <pre id="access-token">%s</pre>
 </div>
+</details>
 
-<p><a href="/logout" class="btn btn-logout">Logout</a></p>
+<p style="margin-top: 20px;"><a href="/logout" class="btn btn-logout">Logout</a></p>
 </body>
-</html>`, cookie.Value)
+</html>`, vehiclesHTML, cookie.Value)
 	} else {
 		_, _ = fmt.Fprint(w, `<!DOCTYPE html>
 <html>
@@ -395,4 +451,35 @@ func generateState() string {
 	b := make([]byte, 32)
 	_, _ = rand.Read(b)
 	return base64.URLEncoding.EncodeToString(b)
+}
+
+func fetchVehicles(accessToken string) ([]Vehicle, error) {
+	req, err := http.NewRequest("GET", audience+"/api/1/vehicles", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch vehicles: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var vehiclesResp VehiclesResponse
+	if err := json.Unmarshal(body, &vehiclesResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return vehiclesResp.Response, nil
 }
