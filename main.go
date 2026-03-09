@@ -42,6 +42,31 @@ type VehiclesResponse struct {
 	Count    int       `json:"count"`
 }
 
+type ChargeState struct {
+	BatteryLevel         int     `json:"battery_level"`
+	BatteryRange         float64 `json:"battery_range"`
+	ChargeCurrentRequest int     `json:"charge_current_request"`
+	ChargeCurrentMax     int     `json:"charge_current_request_max"`
+	ChargeLimitSoc       int     `json:"charge_limit_soc"`
+	ChargePortDoorOpen   bool    `json:"charge_port_door_open"`
+	ChargePortLatch      string  `json:"charge_port_latch"`
+	ChargerActualCurrent int     `json:"charger_actual_current"`
+	ChargerVoltage       int     `json:"charger_voltage"`
+	ChargingState        string  `json:"charging_state"`
+	MinutesToFullCharge  int     `json:"minutes_to_full_charge"`
+}
+
+type VehicleData struct {
+	VIN         string      `json:"vin"`
+	DisplayName string      `json:"display_name"`
+	State       string      `json:"state"`
+	ChargeState ChargeState `json:"charge_state"`
+}
+
+type VehicleDataResponse struct {
+	Response VehicleData `json:"response"`
+}
+
 var (
 	clientID     string
 	clientSecret string
@@ -168,6 +193,37 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 				if v.State == "online" {
 					stateClass = "state-online"
 				}
+
+				// Try to fetch charging data for online vehicles
+				var chargeHTML string
+				if v.State == "online" {
+					if data, err := fetchVehicleData(cookie.Value, v.VIN); err == nil {
+						cs := data.ChargeState
+						chargeStateClass := "state-offline"
+						switch cs.ChargingState {
+						case "Charging":
+							chargeStateClass = "state-charging"
+						case "Complete":
+							chargeStateClass = "state-complete"
+						}
+						chargeHTML = fmt.Sprintf(`
+<tr><td><strong>Battery:</strong></td><td>%d%% (%.1f mi)</td></tr>
+<tr><td><strong>Charge Limit:</strong></td><td>%d%%</td></tr>
+<tr><td><strong>Charging:</strong></td><td><span class="%s">%s</span></td></tr>`,
+							cs.BatteryLevel, cs.BatteryRange, cs.ChargeLimitSoc, chargeStateClass, cs.ChargingState)
+						if cs.ChargingState == "Charging" {
+							chargeHTML += fmt.Sprintf(`
+<tr><td><strong>Current:</strong></td><td>%dA / %dA max @ %dV</td></tr>
+<tr><td><strong>Time to Full:</strong></td><td>%d min</td></tr>`,
+								cs.ChargerActualCurrent, cs.ChargeCurrentRequest, cs.ChargerVoltage, cs.MinutesToFullCharge)
+						}
+					} else {
+						chargeHTML = fmt.Sprintf(`<tr><td colspan="2"><em>Could not fetch charge data: %v</em></td></tr>`, err)
+					}
+				} else {
+					chargeHTML = `<tr><td colspan="2"><em>Vehicle offline - charge data unavailable</em></td></tr>`
+				}
+
 				vehiclesHTML += fmt.Sprintf(`
 <div class="vehicle">
 <h3>%s</h3>
@@ -175,6 +231,7 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 <tr><td><strong>VIN:</strong></td><td><code>%s</code></td></tr>
 <tr><td><strong>State:</strong></td><td><span class="%s">%s</span></td></tr>
 <tr><td><strong>Vehicle ID:</strong></td><td>%d</td></tr>
+%s
 </table>
 <div class="vehicle-actions">
 <button class="btn-cmd btn-flash" data-label="Flash Lights" onclick="sendCommand('%s', 'flash_lights', this)">Flash Lights</button>
@@ -183,7 +240,7 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 <button class="btn-cmd btn-unlock" data-label="Unlock" onclick="sendCommand('%s', 'unlock', this)">Unlock</button>
 </div>
 <div id="status-%s" class="cmd-status"></div>
-</div>`, v.DisplayName, v.VIN, stateClass, v.State, v.VehicleID, v.VIN, v.VIN, v.VIN, v.VIN, v.VIN)
+</div>`, v.DisplayName, v.VIN, stateClass, v.State, v.VehicleID, chargeHTML, v.VIN, v.VIN, v.VIN, v.VIN, v.VIN)
 			}
 			vehiclesHTML += `</div>`
 		}
@@ -208,6 +265,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .vehicle td { padding: 5px 10px 5px 0; }
 .state-online { color: #28a745; font-weight: bold; }
 .state-offline { color: #6c757d; }
+.state-charging { color: #ffc107; font-weight: bold; }
+.state-complete { color: #28a745; font-weight: bold; }
 .vehicle-actions { margin-top: 15px; display: flex; gap: 10px; flex-wrap: wrap; }
 .btn-cmd { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
 .btn-cmd:disabled { opacity: 0.6; cursor: not-allowed; }
@@ -550,6 +609,37 @@ func fetchVehicles(accessToken string) ([]Vehicle, error) {
 	return vehiclesResp.Response, nil
 }
 
+func fetchVehicleData(accessToken, vin string) (*VehicleData, error) {
+	req, err := http.NewRequest("GET", audience+"/api/1/vehicles/"+vin+"/vehicle_data?endpoints=charge_state", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch vehicle data: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var dataResp VehicleDataResponse
+	if err := json.Unmarshal(body, &dataResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &dataResp.Response, nil
+}
+
 func handleVehicleCommand(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -610,6 +700,7 @@ func handleVehicleCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("Command %s succeeded for VIN %s", command, vin)
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"result": true,
 	})
