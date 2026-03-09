@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -12,6 +13,10 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/teslamotors/vehicle-command/pkg/account"
+	"github.com/teslamotors/vehicle-command/pkg/protocol"
+	"github.com/teslamotors/vehicle-command/pkg/vehicle"
 )
 
 type TokenResponse struct {
@@ -46,6 +51,7 @@ var (
 	audience     string
 	scopes       string
 	publicKey    []byte
+	privateKey   protocol.ECDHPrivateKey
 
 	regionAudience = map[string]string{
 		"na": "https://fleet-api.prd.na.vn.cloud.tesla.com",
@@ -103,7 +109,14 @@ func main() {
 		log.Fatalf("Failed to read public key: %v", err)
 	}
 
+	privateKey, err = readPrivateKey()
+	if err != nil {
+		log.Fatalf("Failed to read private key: %v", err)
+	}
+	log.Printf("Loaded private key, public key: %x", privateKey.PublicBytes())
+
 	http.HandleFunc("/.well-known/appspecific/com.tesla.3p.public-key.pem", handlePublicKey)
+	http.HandleFunc("/api/vehicles/", handleVehicleCommand)
 	http.HandleFunc("/callback", handleCallback)
 	http.HandleFunc("/login", handleLogin)
 	http.HandleFunc("/logout", handleLogout)
@@ -163,7 +176,14 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 <tr><td><strong>State:</strong></td><td><span class="%s">%s</span></td></tr>
 <tr><td><strong>Vehicle ID:</strong></td><td>%d</td></tr>
 </table>
-</div>`, v.DisplayName, v.VIN, stateClass, v.State, v.VehicleID)
+<div class="vehicle-actions">
+<button class="btn-cmd btn-flash" data-label="Flash Lights" onclick="sendCommand('%s', 'flash_lights', this)">Flash Lights</button>
+<button class="btn-cmd btn-honk" data-label="Honk Horn" onclick="sendCommand('%s', 'honk_horn', this)">Honk Horn</button>
+<button class="btn-cmd btn-lock" data-label="Lock" onclick="sendCommand('%s', 'lock', this)">Lock</button>
+<button class="btn-cmd btn-unlock" data-label="Unlock" onclick="sendCommand('%s', 'unlock', this)">Unlock</button>
+</div>
+<div id="status-%s" class="cmd-status"></div>
+</div>`, v.DisplayName, v.VIN, stateClass, v.State, v.VehicleID, v.VIN, v.VIN, v.VIN, v.VIN, v.VIN)
 			}
 			vehiclesHTML += `</div>`
 		}
@@ -188,6 +208,20 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .vehicle td { padding: 5px 10px 5px 0; }
 .state-online { color: #28a745; font-weight: bold; }
 .state-offline { color: #6c757d; }
+.vehicle-actions { margin-top: 15px; display: flex; gap: 10px; flex-wrap: wrap; }
+.btn-cmd { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+.btn-cmd:disabled { opacity: 0.6; cursor: not-allowed; }
+.btn-flash { background: #ffc107; color: #000; }
+.btn-flash:hover:not(:disabled) { background: #e0a800; }
+.btn-honk { background: #17a2b8; color: #fff; }
+.btn-honk:hover:not(:disabled) { background: #138496; }
+.btn-lock { background: #28a745; color: #fff; }
+.btn-lock:hover:not(:disabled) { background: #218838; }
+.btn-unlock { background: #dc3545; color: #fff; }
+.btn-unlock:hover:not(:disabled) { background: #c82333; }
+.cmd-status { margin-top: 10px; padding: 8px 12px; border-radius: 4px; display: none; }
+.cmd-success { background: #d4edda; color: #155724; display: block; }
+.cmd-error { background: #f8d7da; color: #721c24; display: block; }
 details { margin-top: 20px; }
 summary { cursor: pointer; font-weight: bold; padding: 10px; background: #f5f5f5; border-radius: 4px; }
 </style>
@@ -199,6 +233,30 @@ function copyToClipboard(id) {
         btn.innerText = 'Copied!';
         setTimeout(() => btn.innerText = 'Copy', 2000);
     });
+}
+async function sendCommand(vin, command, btn) {
+    const statusEl = document.getElementById('status-' + vin);
+    const buttons = btn.parentElement.querySelectorAll('button');
+    buttons.forEach(b => b.disabled = true);
+    btn.innerText = 'Sending...';
+    statusEl.className = 'cmd-status';
+    statusEl.style.display = 'none';
+    try {
+        const resp = await fetch('/api/vehicles/' + vin + '/command/' + command, { method: 'POST' });
+        const data = await resp.json();
+        if (data.result) {
+            statusEl.className = 'cmd-status cmd-success';
+            statusEl.innerText = 'Command sent successfully!';
+        } else {
+            statusEl.className = 'cmd-status cmd-error';
+            statusEl.innerText = 'Error: ' + data.error;
+        }
+    } catch (e) {
+        statusEl.className = 'cmd-status cmd-error';
+        statusEl.innerText = 'Error: ' + e.message;
+    }
+    buttons.forEach(b => b.disabled = false);
+    btn.innerText = btn.dataset.label;
 }
 </script>
 </head>
@@ -442,9 +500,17 @@ func exchangeCode(code string) (*TokenResponse, error) {
 func readPublicKey() ([]byte, error) {
 	keyPath := os.Getenv("TESLA_PUBLIC_KEY_PATH")
 	if keyPath == "" {
-		keyPath = "/app/com.tesla.3p.public-key.pem"
+		keyPath = "/app/keys/public-key.pem"
 	}
 	return os.ReadFile(keyPath)
+}
+
+func readPrivateKey() (protocol.ECDHPrivateKey, error) {
+	keyPath := os.Getenv("TESLA_PRIVATE_KEY_PATH")
+	if keyPath == "" {
+		keyPath = "/app/keys/private-key.pem"
+	}
+	return protocol.LoadPrivateKey(keyPath)
 }
 
 func generateState() string {
@@ -482,4 +548,95 @@ func fetchVehicles(accessToken string) ([]Vehicle, error) {
 	}
 
 	return vehiclesResp.Response, nil
+}
+
+func handleVehicleCommand(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	cookie, err := r.Cookie(cookieName)
+	if err != nil || cookie.Value == "" {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	accessToken := cookie.Value
+
+	// Parse URL: /api/vehicles/{vin}/command/{command}
+	path := strings.TrimPrefix(r.URL.Path, "/api/vehicles/")
+	parts := strings.Split(path, "/")
+	if len(parts) < 3 || parts[1] != "command" {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+	vin := parts[0]
+	command := parts[2]
+
+	w.Header().Set("Content-Type", "application/json")
+
+	var cmdErr error
+	switch command {
+	case "flash_lights":
+		cmdErr = executeVehicleCommand(r.Context(), accessToken, vin, func(v *vehicle.Vehicle) error {
+			return v.FlashLights(r.Context())
+		})
+	case "honk_horn":
+		cmdErr = executeVehicleCommand(r.Context(), accessToken, vin, func(v *vehicle.Vehicle) error {
+			return v.HonkHorn(r.Context())
+		})
+	case "lock":
+		cmdErr = executeVehicleCommand(r.Context(), accessToken, vin, func(v *vehicle.Vehicle) error {
+			return v.Lock(r.Context())
+		})
+	case "unlock":
+		cmdErr = executeVehicleCommand(r.Context(), accessToken, vin, func(v *vehicle.Vehicle) error {
+			return v.Unlock(r.Context())
+		})
+	default:
+		json.NewEncoder(w).Encode(map[string]any{
+			"result": false,
+			"error":  fmt.Sprintf("unknown command: %s", command),
+		})
+		return
+	}
+
+	if cmdErr != nil {
+		log.Printf("Command %s failed for VIN %s: %v", command, vin, cmdErr)
+		json.NewEncoder(w).Encode(map[string]any{
+			"result": false,
+			"error":  cmdErr.Error(),
+		})
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"result": true,
+	})
+}
+
+func executeVehicleCommand(ctx context.Context, accessToken, vin string, cmd func(*vehicle.Vehicle) error) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	acct, err := account.New(accessToken, "tesla-oauth")
+	if err != nil {
+		return fmt.Errorf("failed to create account: %w", err)
+	}
+
+	car, err := acct.GetVehicle(ctx, vin, privateKey, nil)
+	if err != nil {
+		return fmt.Errorf("failed to get vehicle: %w", err)
+	}
+	defer car.Disconnect()
+
+	if err := car.Connect(ctx); err != nil {
+		return fmt.Errorf("failed to connect: %w", err)
+	}
+
+	if err := car.StartSession(ctx, nil); err != nil {
+		return fmt.Errorf("failed to start session: %w", err)
+	}
+
+	return cmd(car)
 }
