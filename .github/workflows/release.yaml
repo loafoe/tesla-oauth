@@ -51,6 +51,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write  # For keyless signing with cosign
 
     steps:
       - name: Checkout
@@ -64,6 +65,10 @@ jobs:
       - name: Setup ko
         uses: ko-build/setup-ko@v0.8
 
+      - name: Install cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@v3
+
       - name: Login to GHCR
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
@@ -74,21 +79,34 @@ jobs:
 
       - name: Build and push (tag)
         if: startsWith(github.ref, 'refs/tags/')
+        id: build-tag
         env:
           KO_DOCKER_REPO: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         run: |
-          ko build --bare --platform=linux/amd64,linux/arm64 \
+          IMAGE=$(ko build --bare --platform=linux/amd64,linux/arm64 \
+            --sbom=spdx \
             --tags=${{ github.ref_name }} \
-            --tags=latest .
+            --tags=latest .)
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
 
       - name: Build and push (main)
         if: github.ref == 'refs/heads/main'
+        id: build-main
         env:
           KO_DOCKER_REPO: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         run: |
-          ko build --bare --platform=linux/amd64,linux/arm64 \
+          IMAGE=$(ko build --bare --platform=linux/amd64,linux/arm64 \
+            --sbom=spdx \
             --tags=latest \
-            --tags=${{ github.sha }} .
+            --tags=${{ github.sha }} .)
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
+
+      - name: Sign image with cosign
+        if: github.event_name != 'pull_request'
+        env:
+          IMAGE: ${{ steps.build-tag.outputs.image || steps.build-main.outputs.image }}
+        run: |
+          cosign sign --yes "${IMAGE}"
 
       - name: Build only (PR)
         if: github.event_name == 'pull_request'
