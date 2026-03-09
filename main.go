@@ -89,7 +89,7 @@ func main() {
 
 	scopes = os.Getenv("TESLA_SCOPES")
 	if scopes == "" {
-		scopes = "openid offline_access vehicle_device_data vehicle_charging_cmds"
+		scopes = "openid offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds"
 	}
 
 	region := os.Getenv("TESLA_REGION")
