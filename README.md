@@ -96,9 +96,59 @@ kubectl apply -f deployment.yaml -n tesla
 
 ## Security
 
-- Access tokens are stored in secure HTTP-only cookies with `SameSite=Strict`
+- Access tokens are stored in secure HTTP-only cookies with `SameSite=Lax`
 - CSRF protection via state parameter stored in a separate cookie
 - Cookie expiry matches token expiry (max 8 hours)
+- Images are signed with [cosign](https://github.com/sigstore/cosign) and include SBOM
+
+## Image Verification
+
+All container images are signed using keyless signing with GitHub Actions OIDC and include an SBOM (Software Bill of Materials).
+
+### Verify image signature
+
+```bash
+cosign verify ghcr.io/loafoe/tesla-oauth:v0.3.1 \
+  --certificate-identity-regexp="https://github.com/loafoe/tesla-oauth" \
+  --certificate-oidc-issuer="https://token.actions.githubusercontent.com"
+```
+
+### Download and view SBOM
+
+```bash
+# Download SBOM
+cosign download sbom ghcr.io/loafoe/tesla-oauth:v0.3.1 > sbom.spdx.json
+
+# View with jq
+cat sbom.spdx.json | jq .
+```
+
+### Verify in Kubernetes admission controller
+
+If using [Kyverno](https://kyverno.io/) or [Sigstore Policy Controller](https://docs.sigstore.dev/policy-controller/overview/), you can enforce signature verification:
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-tesla-oauth
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: verify-signature
+      match:
+        resources:
+          kinds:
+            - Pod
+      verifyImages:
+        - imageReferences:
+            - "ghcr.io/loafoe/tesla-oauth:*"
+          attestors:
+            - entries:
+                - keyless:
+                    subject: "https://github.com/loafoe/tesla-oauth/*"
+                    issuer: "https://token.actions.githubusercontent.com"
+```
 
 ## Regional Fleet API Endpoints
 
