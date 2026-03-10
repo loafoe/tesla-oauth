@@ -224,6 +224,11 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 					chargeHTML = `<tr><td colspan="2"><em>Vehicle offline - charge data unavailable</em></td></tr>`
 				}
 
+				wakeDisabled := ""
+				if v.State == "online" {
+					wakeDisabled = " disabled"
+				}
+
 				vehiclesHTML += fmt.Sprintf(`
 <div class="vehicle">
 <h3>%s</h3>
@@ -234,13 +239,14 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 %s
 </table>
 <div class="vehicle-actions">
+<button class="btn-cmd btn-wake" data-label="Wake" onclick="sendCommand('%s', 'wake', this)"%s>Wake</button>
 <button class="btn-cmd btn-flash" data-label="Flash Lights" onclick="sendCommand('%s', 'flash_lights', this)">Flash Lights</button>
 <button class="btn-cmd btn-honk" data-label="Honk Horn" onclick="sendCommand('%s', 'honk_horn', this)">Honk Horn</button>
 <button class="btn-cmd btn-lock" data-label="Lock" onclick="sendCommand('%s', 'lock', this)">Lock</button>
 <button class="btn-cmd btn-unlock" data-label="Unlock" onclick="sendCommand('%s', 'unlock', this)">Unlock</button>
 </div>
 <div id="status-%s" class="cmd-status"></div>
-</div>`, v.DisplayName, v.VIN, stateClass, v.State, v.VehicleID, chargeHTML, v.VIN, v.VIN, v.VIN, v.VIN, v.VIN)
+</div>`, v.DisplayName, v.VIN, stateClass, v.State, v.VehicleID, chargeHTML, v.VIN, wakeDisabled, v.VIN, v.VIN, v.VIN, v.VIN, v.VIN)
 			}
 			vehiclesHTML += `</div>`
 		}
@@ -278,6 +284,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .btn-lock:hover:not(:disabled) { background: #218838; }
 .btn-unlock { background: #dc3545; color: #fff; }
 .btn-unlock:hover:not(:disabled) { background: #c82333; }
+.btn-wake { background: #6f42c1; color: #fff; }
+.btn-wake:hover:not(:disabled) { background: #5a32a3; }
 .cmd-status { margin-top: 10px; padding: 8px 12px; border-radius: 4px; display: none; }
 .cmd-success { background: #d4edda; color: #155724; display: block; }
 .cmd-error { background: #f8d7da; color: #721c24; display: block; }
@@ -314,7 +322,10 @@ async function sendCommand(vin, command, btn) {
         statusEl.className = 'cmd-status cmd-error';
         statusEl.innerText = 'Error: ' + e.message;
     }
-    buttons.forEach(b => b.disabled = false);
+    buttons.forEach(b => {
+        if (command === 'wake' && b.classList.contains('btn-wake')) return;
+        b.disabled = false;
+    });
     btn.innerText = btn.dataset.label;
 }
 </script>
@@ -667,6 +678,8 @@ func handleVehicleCommand(w http.ResponseWriter, r *http.Request) {
 
 	var cmdErr error
 	switch command {
+	case "wake":
+		cmdErr = wakeVehicle(accessToken, vin)
 	case "flash_lights":
 		cmdErr = executeVehicleCommand(r.Context(), accessToken, vin, func(v *vehicle.Vehicle) error {
 			return v.FlashLights(r.Context())
@@ -704,6 +717,27 @@ func handleVehicleCommand(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"result": true,
 	})
+}
+
+func wakeVehicle(accessToken, vin string) error {
+	req, err := http.NewRequest("POST", audience+"/api/1/vehicles/"+vin+"/wake_up", nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to wake vehicle: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	return nil
 }
 
 func executeVehicleCommand(ctx context.Context, accessToken, vin string, cmd func(*vehicle.Vehicle) error) error {
