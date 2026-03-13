@@ -207,10 +207,10 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 							chargeStateClass = "state-complete"
 						}
 						chargeHTML = fmt.Sprintf(`
-<tr><td><strong>Battery:</strong></td><td>%d%% (%.1f mi)</td></tr>
+<tr><td><strong>Battery:</strong></td><td>%d%% (%.0f km)</td></tr>
 <tr><td><strong>Charge Limit:</strong></td><td>%d%%</td></tr>
 <tr><td><strong>Charging:</strong></td><td><span class="%s">%s</span></td></tr>`,
-							cs.BatteryLevel, cs.BatteryRange, cs.ChargeLimitSoc, chargeStateClass, cs.ChargingState)
+							cs.BatteryLevel, cs.BatteryRange*1.60934, cs.ChargeLimitSoc, chargeStateClass, cs.ChargingState)
 						if cs.ChargingState == "Charging" {
 							chargeHTML += fmt.Sprintf(`
 <tr><td><strong>Current:</strong></td><td>%dA / %dA max @ %dV</td></tr>
