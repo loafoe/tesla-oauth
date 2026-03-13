@@ -244,9 +244,11 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 <button class="btn-cmd btn-honk" data-label="Honk Horn" onclick="sendCommand('%s', 'honk_horn', this)">Honk Horn</button>
 <button class="btn-cmd btn-lock" data-label="Lock" onclick="sendCommand('%s', 'lock', this)">Lock</button>
 <button class="btn-cmd btn-unlock" data-label="Unlock" onclick="sendCommand('%s', 'unlock', this)">Unlock</button>
+<button class="btn-cmd btn-charge-start" data-label="Start Charge" onclick="sendCommand('%s', 'charge_start', this)">Start Charge</button>
+<button class="btn-cmd btn-charge-stop" data-label="Stop Charge" onclick="sendCommand('%s', 'charge_stop', this)">Stop Charge</button>
 </div>
 <div id="status-%s" class="cmd-status"></div>
-</div>`, v.DisplayName, v.VIN, stateClass, v.State, v.VehicleID, chargeHTML, v.VIN, wakeDisabled, v.VIN, v.VIN, v.VIN, v.VIN, v.VIN)
+</div>`, v.DisplayName, v.VIN, stateClass, v.State, v.VehicleID, chargeHTML, v.VIN, wakeDisabled, v.VIN, v.VIN, v.VIN, v.VIN, v.VIN, v.VIN, v.VIN)
 			}
 			vehiclesHTML += `</div>`
 		}
@@ -261,6 +263,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .btn { display: inline-block; padding: 12px 24px; font-size: 16px; text-decoration: none; border-radius: 6px; cursor: pointer; border: none; }
 .btn-logout { background: #dc3545; color: white; }
 .btn-logout:hover { background: #c82333; }
+.btn-refresh { background: #6c757d; color: white; font-size: 14px; padding: 4px 12px; vertical-align: middle; }
+.btn-refresh:hover { background: #5a6268; }
 .token-box { background: #f5f5f5; border: 1px solid #ddd; padding: 15px; border-radius: 4px; margin: 10px 0; position: relative; }
 .token-box pre { margin: 0; white-space: pre-wrap; word-break: break-all; font-size: 12px; }
 .token-box button { position: absolute; top: 10px; right: 10px; padding: 5px 10px; cursor: pointer; }
@@ -286,6 +290,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .btn-unlock:hover:not(:disabled) { background: #c82333; }
 .btn-wake { background: #6f42c1; color: #fff; }
 .btn-wake:hover:not(:disabled) { background: #5a32a3; }
+.btn-charge-start { background: #20c997; color: #fff; }
+.btn-charge-start:hover:not(:disabled) { background: #1aa179; }
+.btn-charge-stop { background: #fd7e14; color: #fff; }
+.btn-charge-stop:hover:not(:disabled) { background: #dc6a0b; }
 .cmd-status { margin-top: 10px; padding: 8px 12px; border-radius: 4px; display: none; }
 .cmd-success { background: #d4edda; color: #155724; display: block; }
 .cmd-error { background: #f8d7da; color: #721c24; display: block; }
@@ -336,7 +344,7 @@ async function sendCommand(vin, command, btn) {
 <p>You are logged in with a valid access token.</p>
 </div>
 
-<h2>Your Vehicles</h2>
+<h2>Your Vehicles <button class="btn btn-refresh" onclick="location.reload()">Refresh</button></h2>
 %s
 
 <details>
@@ -695,6 +703,14 @@ func handleVehicleCommand(w http.ResponseWriter, r *http.Request) {
 	case "unlock":
 		cmdErr = executeVehicleCommand(r.Context(), accessToken, vin, func(v *vehicle.Vehicle) error {
 			return v.Unlock(r.Context())
+		})
+	case "charge_start":
+		cmdErr = executeVehicleCommand(r.Context(), accessToken, vin, func(v *vehicle.Vehicle) error {
+			return v.ChargeStart(r.Context())
+		})
+	case "charge_stop":
+		cmdErr = executeVehicleCommand(r.Context(), accessToken, vin, func(v *vehicle.Vehicle) error {
+			return v.ChargeStop(r.Context())
 		})
 	default:
 		_ = json.NewEncoder(w).Encode(map[string]any{
